@@ -16,8 +16,7 @@ local selection = require "plugins.ghostty.selection"
 local click_to_open = require "plugins.ghostty.click_to_open"
 local project = require "plugins.ghostty.project"
 
-local ok, native = pcall(require, "ghostty_lxl")
-if not ok then ok, native = pcall(require, "plugins.ghostty.libghostty_lxl") end
+local ok, native = pcall(require, "libraries.ghostty_lxl")
 if not ok then native = nil end
 
 local TerminalView = View:extend()
