@@ -47,6 +47,7 @@ function TerminalView:new(options)
   self.exited = false
   self.hover = nil
   self.scrollable_size = 0
+  self.osc52_allowed = self.options.osc52 == "allow"
 
   if native then
     local command_value, shell = command_from_options(self.options)
@@ -95,6 +96,30 @@ local function emit_native_event(view, event)
     event.clean = event.code == 0 and event.signal == 0
   elseif event.kind == "notification" then
     core.log("%s", event.title and (event.title .. ": " .. (event.body or "")) or (event.body or ""))
+  elseif event.kind == "clipboard-write-request" then
+    local policy = view.options.osc52
+    if policy == "deny" then
+      events.emit("clipboard-write-denied", { view = view, terminal = view.terminal, bytes = event.bytes })
+      return
+    end
+    local accept = function()
+      system.set_clipboard(event.text or "")
+      view.osc52_allowed = true
+      events.emit("clipboard-write-accepted", event)
+    end
+    if policy == "allow" or view.osc52_allowed then
+      accept()
+    else
+      core.command_view:enter("Allow terminal clipboard write? Type yes", {
+        submit = function(text)
+          if text == "yes" or text == "y" then
+            accept()
+          else
+            events.emit("clipboard-write-denied", { view = view, terminal = view.terminal, bytes = event.bytes })
+          end
+        end
+      })
+    end
   end
   events.emit(event.kind, event)
 end
@@ -197,11 +222,16 @@ function TerminalView:on_mouse_pressed(button, x, y, clicks)
   local col, row = self:convert_coordinates(x, y)
   local mods = keymap.modkeys
   if mods and mods[config.plugins.ghostty.click_modifier] then
-    local detected = click_to_open.detect(self.visible_rows[row], col)
+    local uri = self.terminal and self.terminal:hyperlink_at(col, row)
+    local detected = uri and { kind = uri:match("^https?://") and "url" or "file_url", target = uri, raw = uri }
+        or click_to_open.detect(self.visible_rows[row], col)
     if click_to_open.open(detected, self.cwd) then
       events.emit("link-opened", { view = self, terminal = self.terminal, target = detected.target, target_type = detected.kind, line = detected.line, col = detected.col })
       return true
     end
+  end
+  if self.terminal and self.terminal:mouse_tracking() then
+    return self.terminal:send_mouse { action = "press", button = button, x = x - self.position.x, y = y - self.position.y, mods = keymap.modkeys }
   end
   selection.start(self.selection, col, row)
   return true
@@ -209,15 +239,25 @@ end
 
 function TerminalView:on_mouse_moved(x, y)
   local col, row = self:convert_coordinates(x, y)
+  if self.terminal and self.terminal:mouse_tracking() then
+    self.terminal:send_mouse { action = "motion", x = x - self.position.x, y = y - self.position.y, mods = keymap.modkeys }
+  end
   selection.update(self.selection, col, row)
 end
 
-function TerminalView:on_mouse_released(button)
+function TerminalView:on_mouse_released(button, x, y)
+  if self.terminal and self.terminal:mouse_tracking() then
+    self.terminal:send_mouse { action = "release", button = button, x = x - self.position.x, y = y - self.position.y, mods = keymap.modkeys }
+  end
   if button == "left" then selection.finish(self.selection) end
 end
 
 function TerminalView:on_mouse_wheel(y)
   if not self.terminal then return false end
+  if self.terminal:mouse_tracking() then
+    self.terminal:send_mouse { action = "press", button = y > 0 and "wheel_up" or "wheel_down", x = 0, y = 0, mods = keymap.modkeys }
+    return true
+  end
   self.terminal:scroll(y > 0 and -3 or 3)
   return true
 end

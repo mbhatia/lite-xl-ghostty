@@ -392,9 +392,118 @@ static int f_send_key(lua_State *L) {
   return 1;
 }
 
+static GhosttyMouseButton mouse_button_from_name(const char *button) {
+  if (!button) return GHOSTTY_MOUSE_BUTTON_UNKNOWN;
+  if (strcmp(button, "left") == 0) return GHOSTTY_MOUSE_BUTTON_LEFT;
+  if (strcmp(button, "right") == 0) return GHOSTTY_MOUSE_BUTTON_RIGHT;
+  if (strcmp(button, "middle") == 0) return GHOSTTY_MOUSE_BUTTON_MIDDLE;
+  if (strcmp(button, "wheel_up") == 0) return GHOSTTY_MOUSE_BUTTON_FOUR;
+  if (strcmp(button, "wheel_down") == 0) return GHOSTTY_MOUSE_BUTTON_FIVE;
+  return GHOSTTY_MOUSE_BUTTON_UNKNOWN;
+}
+
+static GhosttyMouseAction mouse_action_from_name(const char *action) {
+  if (!action) return GHOSTTY_MOUSE_ACTION_PRESS;
+  if (strcmp(action, "release") == 0) return GHOSTTY_MOUSE_ACTION_RELEASE;
+  if (strcmp(action, "motion") == 0) return GHOSTTY_MOUSE_ACTION_MOTION;
+  return GHOSTTY_MOUSE_ACTION_PRESS;
+}
+
+static int f_send_mouse(lua_State *L) {
+  LuaTerminal *ud = check_terminal(L, 1);
+  if (!ud->terminal) {
+    lua_pushboolean(L, 0);
+    return 1;
+  }
+  luaL_checktype(L, 2, LUA_TTABLE);
+  lua_getfield(L, 2, "action");
+  GhosttyMouseAction action = mouse_action_from_name(lua_tostring(L, -1));
+  lua_pop(L, 1);
+  lua_getfield(L, 2, "button");
+  GhosttyMouseButton button = mouse_button_from_name(lua_tostring(L, -1));
+  lua_pop(L, 1);
+  lua_getfield(L, 2, "mods");
+  GhosttyMods mods = mods_from_table(L, lua_gettop(L));
+  lua_pop(L, 1);
+  lua_getfield(L, 2, "x");
+  float x = (float)luaL_optnumber(L, -1, 0);
+  lua_pop(L, 1);
+  lua_getfield(L, 2, "y");
+  float y = (float)luaL_optnumber(L, -1, 0);
+  lua_pop(L, 1);
+
+  LxlGhosttyTerminal *t = ud->terminal;
+  char buf[256];
+  size_t written = 0;
+  pthread_mutex_lock(&t->mu);
+  ghostty_mouse_encoder_setopt_from_terminal(t->mouse_encoder, t->terminal);
+  GhosttyMouseEncoderSize size = {
+    .size = sizeof(GhosttyMouseEncoderSize),
+    .screen_width = (uint32_t)t->cols * t->cell_width_px,
+    .screen_height = (uint32_t)t->rows * t->cell_height_px,
+    .cell_width = t->cell_width_px,
+    .cell_height = t->cell_height_px,
+  };
+  ghostty_mouse_encoder_setopt(t->mouse_encoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, &size);
+  ghostty_mouse_event_set_action(t->mouse_event, action);
+  if (button == GHOSTTY_MOUSE_BUTTON_UNKNOWN || action == GHOSTTY_MOUSE_ACTION_MOTION) ghostty_mouse_event_clear_button(t->mouse_event);
+  else ghostty_mouse_event_set_button(t->mouse_event, button);
+  ghostty_mouse_event_set_mods(t->mouse_event, mods);
+  ghostty_mouse_event_set_position(t->mouse_event, (GhosttyMousePosition){ .x = x, .y = y });
+  GhosttyResult result = ghostty_mouse_encoder_encode(t->mouse_encoder, t->mouse_event, buf, sizeof(buf), &written);
+  pthread_mutex_unlock(&t->mu);
+  if (result == GHOSTTY_SUCCESS && written > 0) {
+    lua_pushboolean(L, lxl_ghostty_terminal_write(t, buf, written));
+  } else {
+    lua_pushboolean(L, 0);
+  }
+  return 1;
+}
+
 static int f_unhandled_false(lua_State *L) {
   (void)L;
   lua_pushboolean(L, 0);
+  return 1;
+}
+
+static int f_hyperlink_at(lua_State *L) {
+  LuaTerminal *ud = check_terminal(L, 1);
+  if (!ud->terminal) {
+    lua_pushnil(L);
+    return 1;
+  }
+  int col = (int)luaL_checkinteger(L, 2) - 1;
+  int row = (int)luaL_checkinteger(L, 3) - 1;
+  if (col < 0 || row < 0) {
+    lua_pushnil(L);
+    return 1;
+  }
+  LxlGhosttyTerminal *t = ud->terminal;
+  pthread_mutex_lock(&t->mu);
+  GhosttyGridRef ref = GHOSTTY_INIT_SIZED(GhosttyGridRef);
+  GhosttyPoint point = {
+    .tag = GHOSTTY_POINT_TAG_VIEWPORT,
+    .value = { .coordinate = { .x = (uint16_t)col, .y = (uint32_t)row } },
+  };
+  GhosttyResult result = ghostty_terminal_grid_ref(t->terminal, point, &ref);
+  size_t len = 0;
+  if (result == GHOSTTY_SUCCESS) result = ghostty_grid_ref_hyperlink_uri(&ref, NULL, 0, &len);
+  if (result != GHOSTTY_OUT_OF_SPACE || len == 0) {
+    pthread_mutex_unlock(&t->mu);
+    lua_pushnil(L);
+    return 1;
+  }
+  uint8_t *buf = (uint8_t *)malloc(len);
+  if (!buf) {
+    pthread_mutex_unlock(&t->mu);
+    lua_pushnil(L);
+    return 1;
+  }
+  result = ghostty_grid_ref_hyperlink_uri(&ref, buf, len, &len);
+  pthread_mutex_unlock(&t->mu);
+  if (result == GHOSTTY_SUCCESS) lua_pushlstring(L, (const char *)buf, len);
+  else lua_pushnil(L);
+  free(buf);
   return 1;
 }
 
@@ -651,8 +760,8 @@ static const luaL_Reg terminal_methods[] = {
   { "bracketed_paste", f_bracketed_paste },
   { "mouse_tracking", f_mouse_tracking },
   { "send_key", f_send_key },
-  { "send_mouse", f_unhandled_false },
-  { "hyperlink_at", f_unhandled_false },
+  { "send_mouse", f_send_mouse },
+  { "hyperlink_at", f_hyperlink_at },
   { "text_at_row", f_unhandled_false },
   { "is_dirty", f_is_dirty },
   { "clear_dirty", f_clear_dirty },
