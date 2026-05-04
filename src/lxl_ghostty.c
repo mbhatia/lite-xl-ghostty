@@ -250,6 +250,60 @@ static int f_clear_dirty(lua_State *L) {
   return 0;
 }
 
+static int f_paste(lua_State *L) {
+  LuaTerminal *ud = check_terminal(L, 1);
+  size_t len = 0;
+  const char *data = luaL_checklstring(L, 2, &len);
+  bool safe = true;
+  bool ok = ud->terminal && lxl_ghostty_terminal_paste(ud->terminal, data, len, &safe);
+  lua_pushboolean(L, ok);
+  if (!safe) lua_pushliteral(L, "unsafe");
+  else lua_pushnil(L);
+  return 2;
+}
+
+static int f_focus(lua_State *L) {
+  LuaTerminal *ud = check_terminal(L, 1);
+  if (ud->terminal) lxl_ghostty_terminal_focus(ud->terminal, lua_toboolean(L, 2));
+  return 0;
+}
+
+static int f_scroll(lua_State *L) {
+  LuaTerminal *ud = check_terminal(L, 1);
+  if (ud->terminal) lxl_ghostty_terminal_scroll(ud->terminal, (intptr_t)luaL_checkinteger(L, 2));
+  return 0;
+}
+
+static int f_scroll_top(lua_State *L) {
+  LuaTerminal *ud = check_terminal(L, 1);
+  if (ud->terminal) lxl_ghostty_terminal_scroll_top(ud->terminal);
+  return 0;
+}
+
+static int f_scroll_bottom(lua_State *L) {
+  LuaTerminal *ud = check_terminal(L, 1);
+  if (ud->terminal) lxl_ghostty_terminal_scroll_bottom(ud->terminal);
+  return 0;
+}
+
+static int f_bracketed_paste(lua_State *L) {
+  LuaTerminal *ud = check_terminal(L, 1);
+  lua_pushboolean(L, ud->terminal && lxl_ghostty_terminal_bracketed_paste(ud->terminal));
+  return 1;
+}
+
+static int f_mouse_tracking(lua_State *L) {
+  LuaTerminal *ud = check_terminal(L, 1);
+  lua_pushboolean(L, ud->terminal && lxl_ghostty_terminal_mouse_tracking(ud->terminal));
+  return 1;
+}
+
+static int f_unhandled_false(lua_State *L) {
+  (void)L;
+  lua_pushboolean(L, 0);
+  return 1;
+}
+
 static int f_title(lua_State *L) {
   LuaTerminal *ud = check_terminal(L, 1);
   if (!ud->terminal || !ud->terminal->last_title) lua_pushnil(L);
@@ -353,6 +407,17 @@ static const luaL_Reg terminal_methods[] = {
   { "resize", f_resize },
   { "write", f_write },
   { "input_text", f_write },
+  { "paste", f_paste },
+  { "focus", f_focus },
+  { "scroll", f_scroll },
+  { "scroll_top", f_scroll_top },
+  { "scroll_bottom", f_scroll_bottom },
+  { "bracketed_paste", f_bracketed_paste },
+  { "mouse_tracking", f_mouse_tracking },
+  { "send_key", f_unhandled_false },
+  { "send_mouse", f_unhandled_false },
+  { "hyperlink_at", f_unhandled_false },
+  { "text_at_row", f_unhandled_false },
   { "is_dirty", f_is_dirty },
   { "clear_dirty", f_clear_dirty },
   { "title", f_title },
