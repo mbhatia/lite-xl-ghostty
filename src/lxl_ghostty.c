@@ -263,6 +263,85 @@ static int f_paste(lua_State *L) {
   return 2;
 }
 
+static int f_copy_selection(lua_State *L) {
+  LuaTerminal *ud = check_terminal(L, 1);
+  if (!ud->terminal) {
+    lua_pushnil(L);
+    return 1;
+  }
+
+  int start_col = (int)luaL_checkinteger(L, 2) - 1;
+  int start_row = (int)luaL_checkinteger(L, 3) - 1;
+  int end_col = (int)luaL_checkinteger(L, 4) - 1;
+  int end_row = (int)luaL_checkinteger(L, 5) - 1;
+  bool rectangle = lua_toboolean(L, 6);
+  if (start_col < 0 || start_row < 0 || end_col < 0 || end_row < 0) {
+    lua_pushnil(L);
+    return 1;
+  }
+
+  LxlGhosttyTerminal *t = ud->terminal;
+  pthread_mutex_lock(&t->mu);
+
+  GhosttySelection selection = GHOSTTY_INIT_SIZED(GhosttySelection);
+  GhosttyPoint start = {
+    .tag = GHOSTTY_POINT_TAG_VIEWPORT,
+    .value = { .coordinate = { .x = (uint16_t)start_col, .y = (uint32_t)start_row } },
+  };
+  GhosttyPoint end = {
+    .tag = GHOSTTY_POINT_TAG_VIEWPORT,
+    .value = { .coordinate = { .x = (uint16_t)end_col, .y = (uint32_t)end_row } },
+  };
+  GhosttyResult result = ghostty_terminal_grid_ref(t->terminal, start, &selection.start);
+  if (result == GHOSTTY_SUCCESS) result = ghostty_terminal_grid_ref(t->terminal, end, &selection.end);
+  if (result != GHOSTTY_SUCCESS) {
+    pthread_mutex_unlock(&t->mu);
+    lua_pushnil(L);
+    return 1;
+  }
+  selection.rectangle = rectangle;
+
+  GhosttyFormatterTerminalOptions options = GHOSTTY_INIT_SIZED(GhosttyFormatterTerminalOptions);
+  options.emit = GHOSTTY_FORMATTER_FORMAT_PLAIN;
+  options.unwrap = false;
+  options.trim = true;
+  options.selection = &selection;
+  options.extra = GHOSTTY_INIT_SIZED(GhosttyFormatterTerminalExtra);
+  options.extra.screen = GHOSTTY_INIT_SIZED(GhosttyFormatterScreenExtra);
+
+  GhosttyFormatter formatter = NULL;
+  result = ghostty_formatter_terminal_new(NULL, &formatter, t->terminal, options);
+  if (result != GHOSTTY_SUCCESS) {
+    pthread_mutex_unlock(&t->mu);
+    lua_pushnil(L);
+    return 1;
+  }
+
+  size_t needed = 0;
+  result = ghostty_formatter_format_buf(formatter, NULL, 0, &needed);
+  if (result != GHOSTTY_OUT_OF_SPACE && result != GHOSTTY_SUCCESS) {
+    ghostty_formatter_free(formatter);
+    pthread_mutex_unlock(&t->mu);
+    lua_pushnil(L);
+    return 1;
+  }
+
+  uint8_t *buf = needed ? (uint8_t *)malloc(needed) : NULL;
+  if (needed && !buf) {
+    ghostty_formatter_free(formatter);
+    pthread_mutex_unlock(&t->mu);
+    return luaL_error(L, "out of memory");
+  }
+  result = ghostty_formatter_format_buf(formatter, buf, needed, &needed);
+  ghostty_formatter_free(formatter);
+  pthread_mutex_unlock(&t->mu);
+
+  if (result == GHOSTTY_SUCCESS) lua_pushlstring(L, (const char *)buf, needed);
+  else lua_pushnil(L);
+  free(buf);
+  return 1;
+}
+
 static int f_focus(lua_State *L) {
   LuaTerminal *ud = check_terminal(L, 1);
   if (ud->terminal) lxl_ghostty_terminal_focus(ud->terminal, lua_toboolean(L, 2));
@@ -753,6 +832,7 @@ static const luaL_Reg terminal_methods[] = {
   { "write", f_write },
   { "input_text", f_write },
   { "paste", f_paste },
+  { "copy_selection", f_copy_selection },
   { "focus", f_focus },
   { "scroll", f_scroll },
   { "scroll_top", f_scroll_top },
@@ -795,8 +875,17 @@ static int open_module(lua_State *L) {
 int luaopen_libghostty_lxl(lua_State *L) {
   return open_module(L);
 }
+
+int luaopen_ghostty_lxl(lua_State *L) {
+  return open_module(L);
+}
 #else
 int luaopen_lite_xl_libghostty_lxl(lua_State *L, void *XL) {
+  lite_xl_plugin_init(XL);
+  return open_module(L);
+}
+
+int luaopen_lite_xl_ghostty_lxl(lua_State *L, void *XL) {
   lite_xl_plugin_init(XL);
   return open_module(L);
 }

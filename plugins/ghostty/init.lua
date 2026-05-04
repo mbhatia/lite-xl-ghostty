@@ -16,7 +16,8 @@ local selection = require "plugins.ghostty.selection"
 local click_to_open = require "plugins.ghostty.click_to_open"
 local project = require "plugins.ghostty.project"
 
-local ok, native = pcall(require, "plugins.ghostty.libghostty_lxl")
+local ok, native = pcall(require, "ghostty_lxl")
+if not ok then ok, native = pcall(require, "plugins.ghostty.libghostty_lxl") end
 if not ok then native = nil end
 
 local TerminalView = View:extend()
@@ -30,6 +31,71 @@ local function cell_size(font)
   local w = font:get_width("M")
   local h = font:get_height()
   return math.max(1, math.floor(w)), math.max(1, math.floor(h))
+end
+
+local shifted_repeat_keys = {
+  ["`"] = "~",
+  ["1"] = "!",
+  ["2"] = "@",
+  ["3"] = "#",
+  ["4"] = "$",
+  ["5"] = "%",
+  ["6"] = "^",
+  ["7"] = "&",
+  ["8"] = "*",
+  ["9"] = "(",
+  ["0"] = ")",
+  ["-"] = "_",
+  ["="] = "+",
+  ["["] = "{",
+  ["]"] = "}",
+  ["\\"] = "|",
+  [";"] = ":",
+  ["'"] = "\"",
+  [","] = "<",
+  ["."] = ">",
+  ["/"] = "?",
+}
+
+local named_repeat_keys = {
+  space = " ",
+  minus = "-",
+  equals = "=",
+  ["left bracket"] = "[",
+  ["right bracket"] = "]",
+  backslash = "\\",
+  semicolon = ";",
+  quote = "'",
+  comma = ",",
+  period = ".",
+  slash = "/",
+  grave = "`",
+}
+
+local pressed_repeat_keys = {}
+
+local function repeat_text_for_key(key, mods)
+  if not key or key == "" then return nil end
+  mods = mods or {}
+  if mods.ctrl or mods.alt or mods.option or mods.altgr or mods.cmd then return nil end
+
+  local text = named_repeat_keys[key] or (#key == 1 and key)
+  if not text then return nil end
+
+  if mods.shift then
+    if text:match("^%l$") then
+      text = text:upper()
+    else
+      text = shifted_repeat_keys[text] or text
+    end
+  end
+  return text
+end
+
+local function clamp_cell(view, col, row)
+  local cols = (view.snapshot and view.snapshot.cols) or view.cols or 1
+  local rows = (view.snapshot and view.snapshot.rows) or view.rows or 1
+  return math.max(1, math.min(cols, col)), math.max(1, math.min(rows, row))
 end
 
 function TerminalView:new(options)
@@ -158,6 +224,21 @@ local function color_or_default(color, fallback)
   return color or fallback
 end
 
+local function draw_cursor(view)
+  local cursor = view.snapshot and view.snapshot.cursor
+  if not cursor or not cursor.visible then return end
+
+  local x = view.position.x + ((cursor.x or 0) * view.cell_width)
+  local y = view.position.y + ((cursor.y or 0) * view.cell_height)
+  renderer.draw_rect(
+    x,
+    y,
+    view.cell_width,
+    view.cell_height,
+    color_or_default(view.options.cursor, style.caret)
+  )
+end
+
 function TerminalView:draw()
   self:draw_background(style.background)
   local font = self.options.font or style.code_font
@@ -175,21 +256,46 @@ function TerminalView:draw()
   local y = self.position.y
   for row_index, row in ipairs(self.snapshot.rows_data) do
     local line = {}
+    local spans = {}
     for _, span in ipairs(row.spans or {}) do
       local x = self.position.x + ((span.x or 0) * self.cell_width)
       if span.bg then
         renderer.draw_rect(x, y, font:get_width(span.text), self.cell_height, span.bg)
       end
-      renderer.draw_text(font, span.text, x, y, span.fg or self.options.foreground or style.text)
+      spans[#spans + 1] = { span = span, x = x }
       line[#line + 1] = span.text
+    end
+    local sel_start, sel_end = selection.row_range(self.selection, row_index, self.snapshot.cols or self.cols or 1)
+    if sel_start and sel_end then
+      renderer.draw_rect(
+        self.position.x + ((sel_start - 1) * self.cell_width),
+        y,
+        ((sel_end - sel_start) + 1) * self.cell_width,
+        self.cell_height,
+        style.selection
+      )
+    end
+    for _, item in ipairs(spans) do
+      local span = item.span
+      renderer.draw_text(font, span.text, item.x, y, span.fg or self.options.foreground or style.text)
     end
     self.visible_rows[row_index] = table.concat(line)
     y = y + self.cell_height
   end
+  draw_cursor(self)
 end
 
 function TerminalView:on_text_input(text)
   if self.terminal and text and text ~= "" then self.terminal:input_text(text) end
+end
+
+function TerminalView:on_key_repeated(key)
+  local text = repeat_text_for_key(key, keymap.modkeys)
+  if text then
+    self.terminal:input_text(text)
+    return true
+  end
+  return false
 end
 
 function TerminalView:on_key_pressed(key, scancode, repeated, modifiers)
@@ -214,7 +320,16 @@ end
 function TerminalView:convert_coordinates(x, y)
   local col = math.floor((x - self.position.x) / (self.cell_width or 1)) + 1
   local row = math.floor((y - self.position.y) / (self.cell_height or 1)) + 1
-  return col, row
+  return clamp_cell(self, col, row)
+end
+
+function TerminalView:copy_selection()
+  if not self.terminal or not selection.has_selection(self.selection) then return false end
+  local first, last = selection.range(self.selection)
+  local text = self.terminal:copy_selection(first.col, first.row, last.col, last.row)
+  if not text or text == "" then return false end
+  system.set_clipboard(text)
+  return true
 end
 
 function TerminalView:on_mouse_pressed(button, x, y, clicks)
@@ -230,26 +345,36 @@ function TerminalView:on_mouse_pressed(button, x, y, clicks)
       return true
     end
   end
-  if self.terminal and self.terminal:mouse_tracking() then
+  if self.terminal and self.terminal:mouse_tracking() and not (mods and mods.shift) then
     return self.terminal:send_mouse { action = "press", button = button, x = x - self.position.x, y = y - self.position.y, mods = keymap.modkeys }
   end
   selection.start(self.selection, col, row)
+  core.redraw = true
   return true
 end
 
 function TerminalView:on_mouse_moved(x, y)
   local col, row = self:convert_coordinates(x, y)
+  if self.selection.active then
+    if selection.update(self.selection, col, row) then core.redraw = true end
+    return true
+  end
   if self.terminal and self.terminal:mouse_tracking() then
     self.terminal:send_mouse { action = "motion", x = x - self.position.x, y = y - self.position.y, mods = keymap.modkeys }
   end
-  selection.update(self.selection, col, row)
 end
 
 function TerminalView:on_mouse_released(button, x, y)
+  if self.selection.active then
+    if button == "left" then
+      selection.finish(self.selection)
+      core.redraw = true
+    end
+    return true
+  end
   if self.terminal and self.terminal:mouse_tracking() then
     self.terminal:send_mouse { action = "release", button = button, x = x - self.position.x, y = y - self.position.y, mods = keymap.modkeys }
   end
-  if button == "left" then selection.finish(self.selection) end
 end
 
 function TerminalView:on_mouse_wheel(y)
@@ -322,12 +447,15 @@ end, {
   ["ghostty:key-pageup"] = function(view) view:on_key_pressed("pageup") end,
   ["ghostty:key-pagedown"] = function(view) view:on_key_pressed("pagedown") end,
   ["ghostty:key-ctrl-c"] = function(view) view:on_key_pressed("c", nil, false, { ctrl = true }) end,
+  ["ghostty:copy-or-interrupt"] = function(view)
+    if not view:copy_selection() then view:on_key_pressed("c", nil, false, { ctrl = true }) end
+  end,
   ["ghostty:paste"] = function(view)
     local text = system.get_clipboard()
     if text and text ~= "" then view.terminal:paste(text) end
   end,
   ["ghostty:copy-selection"] = function(view)
-    system.set_clipboard(selection.extract(view.selection, view.visible_rows))
+    view:copy_selection()
   end,
   ["ghostty:scroll-up"] = function(view) if view.terminal then view.terminal:scroll(-3) end end,
   ["ghostty:scroll-down"] = function(view) if view.terminal then view.terminal:scroll(3) end end,
@@ -360,9 +488,44 @@ keymap.add {
   ["ctrl+shift+w"] = "ghostty:close-terminal",
 }
 
+if PLATFORM == "Mac OS X" then
+  keymap.add {
+    ["cmd+c"] = "ghostty:copy-or-interrupt",
+    ["cmd+v"] = "ghostty:paste",
+  }
+else
+  keymap.add {
+    ["ctrl+shift+c"] = "ghostty:copy-selection",
+  }
+end
+
 keymap.add_direct {
   ["ctrl+c"] = "ghostty:key-ctrl-c",
 }
+
+if not keymap.ghostty_repeat_on_key_pressed then
+  keymap.ghostty_repeat_on_key_pressed = keymap.on_key_pressed
+  function keymap.on_key_pressed(key, scancode, repeated, ...)
+    local performed = keymap.ghostty_repeat_on_key_pressed(key, scancode, repeated, ...)
+    if performed then return true end
+
+    local view = core.active_view
+    if view and view.on_key_repeated and view.terminal and repeat_text_for_key(key, keymap.modkeys) then
+      if repeated == true or pressed_repeat_keys[key] then
+        pressed_repeat_keys[key] = true
+        return view:on_key_repeated(key)
+      end
+      pressed_repeat_keys[key] = true
+    end
+    return false
+  end
+
+  keymap.ghostty_repeat_on_key_released = keymap.on_key_released
+  function keymap.on_key_released(key, ...)
+    pressed_repeat_keys[key] = nil
+    return keymap.ghostty_repeat_on_key_released(key, ...)
+  end
+end
 
 return {
   TerminalView = TerminalView,
