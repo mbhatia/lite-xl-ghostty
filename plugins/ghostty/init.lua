@@ -175,6 +175,9 @@ function TerminalView:on_key_pressed(key, scancode, repeated, modifiers)
   if modifiers.shift then parts[#parts + 1] = "shift" end
   if modifiers.alt then parts[#parts + 1] = "alt" end
   parts[#parts + 1] = key
+  if self.terminal:send_key { key = key, mods = modifiers, repeated = repeated, scancode = scancode } then
+    return true
+  end
   local encoded = terminal_keys.fallback(table.concat(parts, "+"))
   if encoded then
     self.terminal:write(encoded)

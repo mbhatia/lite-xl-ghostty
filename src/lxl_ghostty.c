@@ -1,5 +1,6 @@
 #include "lxl_ghostty.h"
 #include "terminal.h"
+#include "utf8.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -298,6 +299,99 @@ static int f_mouse_tracking(lua_State *L) {
   return 1;
 }
 
+static GhosttyKey key_from_name(const char *key) {
+  if (!key) return GHOSTTY_KEY_UNIDENTIFIED;
+  if (strcmp(key, "return") == 0 || strcmp(key, "enter") == 0) return GHOSTTY_KEY_ENTER;
+  if (strcmp(key, "backspace") == 0) return GHOSTTY_KEY_BACKSPACE;
+  if (strcmp(key, "delete") == 0) return GHOSTTY_KEY_DELETE;
+  if (strcmp(key, "tab") == 0) return GHOSTTY_KEY_TAB;
+  if (strcmp(key, "escape") == 0) return GHOSTTY_KEY_ESCAPE;
+  if (strcmp(key, "up") == 0) return GHOSTTY_KEY_ARROW_UP;
+  if (strcmp(key, "down") == 0) return GHOSTTY_KEY_ARROW_DOWN;
+  if (strcmp(key, "left") == 0) return GHOSTTY_KEY_ARROW_LEFT;
+  if (strcmp(key, "right") == 0) return GHOSTTY_KEY_ARROW_RIGHT;
+  if (strcmp(key, "home") == 0) return GHOSTTY_KEY_HOME;
+  if (strcmp(key, "end") == 0) return GHOSTTY_KEY_END;
+  if (strcmp(key, "pageup") == 0) return GHOSTTY_KEY_PAGE_UP;
+  if (strcmp(key, "pagedown") == 0) return GHOSTTY_KEY_PAGE_DOWN;
+  if (strcmp(key, "insert") == 0) return GHOSTTY_KEY_INSERT;
+  if (key[0] == 'f') {
+    int n = atoi(key + 1);
+    if (n >= 1 && n <= 12) return (GhosttyKey)(GHOSTTY_KEY_F1 + (n - 1));
+  }
+  if (strlen(key) == 1) {
+    char c = key[0];
+    if (c >= 'a' && c <= 'z') return (GhosttyKey)(GHOSTTY_KEY_A + (c - 'a'));
+    if (c >= '0' && c <= '9') return (GhosttyKey)(GHOSTTY_KEY_DIGIT_0 + (c - '0'));
+    if (c == ' ') return GHOSTTY_KEY_SPACE;
+  }
+  return GHOSTTY_KEY_UNIDENTIFIED;
+}
+
+static GhosttyMods mods_from_table(lua_State *L, int index) {
+  GhosttyMods mods = 0;
+  if (!lua_istable(L, index)) return mods;
+  lua_getfield(L, index, "shift");
+  if (lua_toboolean(L, -1)) mods |= GHOSTTY_MODS_SHIFT;
+  lua_pop(L, 1);
+  lua_getfield(L, index, "ctrl");
+  if (lua_toboolean(L, -1)) mods |= GHOSTTY_MODS_CTRL;
+  lua_pop(L, 1);
+  lua_getfield(L, index, "alt");
+  if (lua_toboolean(L, -1)) mods |= GHOSTTY_MODS_ALT;
+  lua_pop(L, 1);
+  lua_getfield(L, index, "cmd");
+  if (lua_toboolean(L, -1)) mods |= GHOSTTY_MODS_SUPER;
+  lua_pop(L, 1);
+  return mods;
+}
+
+static int f_send_key(lua_State *L) {
+  LuaTerminal *ud = check_terminal(L, 1);
+  if (!ud->terminal) {
+    lua_pushboolean(L, 0);
+    return 1;
+  }
+  luaL_checktype(L, 2, LUA_TTABLE);
+  lua_getfield(L, 2, "key");
+  const char *key_name = lua_tostring(L, -1);
+  GhosttyKey gkey = key_from_name(key_name);
+  lua_pop(L, 1);
+  if (gkey == GHOSTTY_KEY_UNIDENTIFIED) {
+    lua_pushboolean(L, 0);
+    return 1;
+  }
+
+  lua_getfield(L, 2, "mods");
+  GhosttyMods mods = mods_from_table(L, lua_gettop(L));
+  lua_pop(L, 1);
+  lua_getfield(L, 2, "text");
+  size_t text_len = 0;
+  const char *text = lua_tolstring(L, -1, &text_len);
+
+  LxlGhosttyTerminal *t = ud->terminal;
+  char buf[256];
+  size_t written = 0;
+  pthread_mutex_lock(&t->mu);
+  ghostty_key_encoder_setopt_from_terminal(t->key_encoder, t->terminal);
+  GhosttyOptionAsAlt option_as_alt = GHOSTTY_OPTION_AS_ALT_TRUE;
+  ghostty_key_encoder_setopt(t->key_encoder, GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT, &option_as_alt);
+  ghostty_key_event_set_key(t->key_event, gkey);
+  ghostty_key_event_set_action(t->key_event, GHOSTTY_KEY_ACTION_PRESS);
+  ghostty_key_event_set_mods(t->key_event, mods);
+  ghostty_key_event_set_consumed_mods(t->key_event, 0);
+  ghostty_key_event_set_utf8(t->key_event, text, text_len);
+  GhosttyResult result = ghostty_key_encoder_encode(t->key_encoder, t->key_event, buf, sizeof(buf), &written);
+  pthread_mutex_unlock(&t->mu);
+  lua_pop(L, 1);
+  if (result == GHOSTTY_SUCCESS && written > 0) {
+    lua_pushboolean(L, lxl_ghostty_terminal_write(t, buf, written));
+  } else {
+    lua_pushboolean(L, 0);
+  }
+  return 1;
+}
+
 static int f_unhandled_false(lua_State *L) {
   (void)L;
   lua_pushboolean(L, 0);
@@ -382,20 +476,162 @@ static int f_update_render(lua_State *L) {
     lua_pushnil(L);
     return 1;
   }
-  pthread_mutex_lock(&ud->terminal->mu);
-  GhosttyResult result = ghostty_render_state_update(ud->terminal->render_state, ud->terminal->terminal);
-  uint16_t cols = ud->terminal->cols;
-  uint16_t rows = ud->terminal->rows;
-  pthread_mutex_unlock(&ud->terminal->mu);
+  LxlGhosttyTerminal *t = ud->terminal;
+  pthread_mutex_lock(&t->mu);
+  GhosttyResult result = ghostty_render_state_update(t->render_state, t->terminal);
   if (result != GHOSTTY_SUCCESS) {
+    pthread_mutex_unlock(&t->mu);
     lua_pushnil(L);
     return 1;
   }
+  uint16_t cols = t->cols;
+  uint16_t rows = t->rows;
+  GhosttyRenderStateColors colors = GHOSTTY_INIT_SIZED(GhosttyRenderStateColors);
+  ghostty_render_state_colors_get(t->render_state, &colors);
+
   lua_newtable(L);
   lua_pushinteger(L, cols);
   lua_setfield(L, -2, "cols");
   lua_pushinteger(L, rows);
   lua_setfield(L, -2, "rows");
+
+  lua_newtable(L);
+  lua_pushinteger(L, colors.background.r);
+  lua_rawseti(L, -2, 1);
+  lua_pushinteger(L, colors.background.g);
+  lua_rawseti(L, -2, 2);
+  lua_pushinteger(L, colors.background.b);
+  lua_rawseti(L, -2, 3);
+  lua_setfield(L, -2, "background");
+
+  lua_newtable(L);
+  lua_pushinteger(L, colors.foreground.r);
+  lua_rawseti(L, -2, 1);
+  lua_pushinteger(L, colors.foreground.g);
+  lua_rawseti(L, -2, 2);
+  lua_pushinteger(L, colors.foreground.b);
+  lua_rawseti(L, -2, 3);
+  lua_setfield(L, -2, "foreground");
+
+  bool cursor_visible = false;
+  bool cursor_has_value = false;
+  uint16_t cursor_x = 0;
+  uint16_t cursor_y = 0;
+  ghostty_render_state_get(t->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE, &cursor_visible);
+  ghostty_render_state_get(t->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE, &cursor_has_value);
+  if (cursor_has_value) {
+    ghostty_render_state_get(t->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X, &cursor_x);
+    ghostty_render_state_get(t->render_state, GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y, &cursor_y);
+  }
+  lua_newtable(L);
+  lua_pushinteger(L, cursor_x);
+  lua_setfield(L, -2, "x");
+  lua_pushinteger(L, cursor_y);
+  lua_setfield(L, -2, "y");
+  lua_pushboolean(L, cursor_visible && cursor_has_value);
+  lua_setfield(L, -2, "visible");
+  lua_setfield(L, -2, "cursor");
+
+  GhosttyTerminalScrollbar scrollbar = {0};
+  if (ghostty_terminal_get(t->terminal, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &scrollbar) == GHOSTTY_SUCCESS) {
+    lua_newtable(L);
+    lua_pushinteger(L, (lua_Integer)scrollbar.total);
+    lua_setfield(L, -2, "total");
+    lua_pushinteger(L, (lua_Integer)scrollbar.offset);
+    lua_setfield(L, -2, "offset");
+    lua_pushinteger(L, (lua_Integer)scrollbar.len);
+    lua_setfield(L, -2, "len");
+    lua_setfield(L, -2, "scrollbar");
+  }
+
+  lua_newtable(L);
+  if (ghostty_render_state_get(t->render_state, GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR, &t->row_iter) == GHOSTTY_SUCCESS) {
+    int row_index = 1;
+    while (ghostty_render_state_row_iterator_next(t->row_iter)) {
+      bool row_dirty = false;
+      ghostty_render_state_row_get(t->row_iter, GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY, &row_dirty);
+      lua_newtable(L);
+      lua_pushboolean(L, row_dirty);
+      lua_setfield(L, -2, "dirty");
+      lua_pushliteral(L, "none");
+      lua_setfield(L, -2, "semantic");
+      lua_newtable(L);
+      if (ghostty_render_state_row_get(t->row_iter, GHOSTTY_RENDER_STATE_ROW_DATA_CELLS, &t->row_cells) == GHOSTTY_SUCCESS) {
+        int span_index = 1;
+        int x = 0;
+        while (ghostty_render_state_row_cells_next(t->row_cells)) {
+          uint32_t grapheme_len = 0;
+          ghostty_render_state_row_cells_get(t->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN, &grapheme_len);
+          if (grapheme_len > 0) {
+            uint32_t stack_buf[16];
+            uint32_t *codepoints = stack_buf;
+            if (grapheme_len > 16) codepoints = (uint32_t *)malloc(sizeof(uint32_t) * grapheme_len);
+            if (codepoints) {
+              ghostty_render_state_row_cells_get(t->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF, codepoints);
+              char text_buf[256];
+              size_t text_len = 0;
+              for (uint32_t i = 0; i < grapheme_len && text_len + 4 <= sizeof(text_buf); i++) {
+                text_len += lxl_ghostty_utf8_encode(codepoints[i], text_buf + text_len);
+              }
+              if (grapheme_len > 16) free(codepoints);
+
+              GhosttyStyle style = GHOSTTY_INIT_SIZED(GhosttyStyle);
+              GhosttyColorRgb fg = colors.foreground;
+              GhosttyColorRgb bg = colors.background;
+              bool has_bg = false;
+              ghostty_render_state_row_cells_get(t->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &style);
+              ghostty_render_state_row_cells_get(t->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR, &fg);
+              has_bg = ghostty_render_state_row_cells_get(t->row_cells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR, &bg) == GHOSTTY_SUCCESS;
+
+              lua_newtable(L);
+              lua_pushinteger(L, x);
+              lua_setfield(L, -2, "x");
+              lua_pushlstring(L, text_buf, text_len);
+              lua_setfield(L, -2, "text");
+              lua_newtable(L);
+              lua_pushinteger(L, fg.r);
+              lua_rawseti(L, -2, 1);
+              lua_pushinteger(L, fg.g);
+              lua_rawseti(L, -2, 2);
+              lua_pushinteger(L, fg.b);
+              lua_rawseti(L, -2, 3);
+              lua_setfield(L, -2, "fg");
+              if (has_bg) {
+                lua_newtable(L);
+                lua_pushinteger(L, bg.r);
+                lua_rawseti(L, -2, 1);
+                lua_pushinteger(L, bg.g);
+                lua_rawseti(L, -2, 2);
+                lua_pushinteger(L, bg.b);
+                lua_rawseti(L, -2, 3);
+                lua_setfield(L, -2, "bg");
+              }
+              lua_pushboolean(L, style.bold);
+              lua_setfield(L, -2, "bold");
+              lua_pushboolean(L, style.italic);
+              lua_setfield(L, -2, "italic");
+              lua_pushboolean(L, style.underline != 0);
+              lua_setfield(L, -2, "underline");
+              lua_pushboolean(L, style.strikethrough);
+              lua_setfield(L, -2, "strikethrough");
+              lua_pushboolean(L, style.inverse);
+              lua_setfield(L, -2, "inverse");
+              lua_rawseti(L, -2, span_index++);
+            }
+          }
+          x++;
+        }
+      }
+      lua_setfield(L, -2, "spans");
+      bool clean = false;
+      ghostty_render_state_row_set(t->row_iter, GHOSTTY_RENDER_STATE_ROW_OPTION_DIRTY, &clean);
+      lua_rawseti(L, -2, row_index++);
+    }
+  }
+  lua_setfield(L, -2, "rows_data");
+  GhosttyRenderStateDirty clean_state = GHOSTTY_RENDER_STATE_DIRTY_FALSE;
+  ghostty_render_state_set(t->render_state, GHOSTTY_RENDER_STATE_OPTION_DIRTY, &clean_state);
+  pthread_mutex_unlock(&t->mu);
   return 1;
 }
 
@@ -414,7 +650,7 @@ static const luaL_Reg terminal_methods[] = {
   { "scroll_bottom", f_scroll_bottom },
   { "bracketed_paste", f_bracketed_paste },
   { "mouse_tracking", f_mouse_tracking },
-  { "send_key", f_unhandled_false },
+  { "send_key", f_send_key },
   { "send_mouse", f_unhandled_false },
   { "hyperlink_at", f_unhandled_false },
   { "text_at_row", f_unhandled_false },
