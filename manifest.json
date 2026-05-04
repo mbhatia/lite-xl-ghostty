@@ -1,0 +1,23 @@
+{
+  "addons": [
+    {
+      "id": "ghostty",
+      "version": "0.1.0",
+      "mod_version": "3",
+      "path": "plugins/ghostty",
+      "description": "A Lite XL integrated terminal backed by Ghostty's libghostty-vt.",
+      "dependencies": {
+        "ghostty_lxl": {}
+      },
+      "files": []
+    },
+    {
+      "id": "ghostty_lxl",
+      "version": "0.1.0",
+      "type": "library",
+      "path": "libraries/ghostty_lxl",
+      "description": "Native Ghostty terminal module for lite-xl-ghostty.",
+      "files": []
+    }
+  ]
+}

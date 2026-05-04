@@ -1,0 +1,7 @@
+build/
+libraries/ghostty_lxl/init.dylib
+libraries/ghostty_lxl/init.lib
+libraries/ghostty_lxl/init.so
+plugins/ghostty/libghostty_lxl.dylib
+plugins/ghostty/libghostty_lxl.lib
+plugins/ghostty/libghostty_lxl.so
