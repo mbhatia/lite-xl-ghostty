@@ -140,11 +140,22 @@ function TerminalView:supports_text_input()
   return true
 end
 
+function TerminalView:set_target_size(axis, value)
+  if axis ~= "x" and axis ~= "y" then return false end
+  self.size[axis] = math.max(0, value)
+  return true
+end
+
 function TerminalView:close()
   if self.terminal then
     self.terminal:close()
     events.emit("terminal-closed", { view = self, terminal = self.terminal })
     self.terminal = nil
+  end
+  if core.ghostty_view == self then
+    core.ghostty_view = nil
+    core.ghostty_view_node = nil
+    core.ghostty_view_closed = nil
   end
 end
 
@@ -395,7 +406,11 @@ end
 local function open_drawer(options)
   if not core.ghostty_view then
     core.ghostty_view = TerminalView(common.merge({ drawer_height = config.plugins.ghostty.drawer_height }, options or {}))
+    core.ghostty_view:set_target_size("y", core.ghostty_view.options.drawer_height or config.plugins.ghostty.drawer_height)
     core.ghostty_view_node = core.root_view:get_active_node_default():split("down", core.ghostty_view, { y = true }, true)
+  elseif core.ghostty_view_closed then
+    core.ghostty_view_node:resize("y", core.ghostty_view_closed)
+    core.ghostty_view_closed = nil
   end
   core.set_active_view(core.ghostty_view)
   return core.ghostty_view
