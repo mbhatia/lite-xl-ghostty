@@ -73,10 +73,9 @@ local named_repeat_keys = {
 
 local pressed_repeat_keys = {}
 
-local function repeat_text_for_key(key, mods)
+local function printable_text_for_key(key, mods)
   if not key or key == "" then return nil end
   mods = mods or {}
-  if mods.ctrl or mods.alt or mods.option or mods.altgr or mods.cmd then return nil end
 
   local text = named_repeat_keys[key] or (#key == 1 and key)
   if not text then return nil end
@@ -89,6 +88,54 @@ local function repeat_text_for_key(key, mods)
     end
   end
   return text
+end
+
+local function repeat_text_for_key(key, mods)
+  mods = mods or {}
+  if mods.ctrl or mods.alt or mods.option or mods.altgr or mods.cmd then return nil end
+  return printable_text_for_key(key, mods)
+end
+
+local function modifiers_from_keymap(modifiers)
+  local source = modifiers or keymap.modkeys or {}
+  return {
+    ctrl = source.ctrl,
+    shift = source.shift,
+    alt = source.alt or source.option,
+    option = source.option,
+    altgr = source.altgr,
+    cmd = source.cmd,
+  }
+end
+
+local function key_combo(key, mods)
+  local parts = {}
+  if mods.ctrl then parts[#parts + 1] = "ctrl" end
+  if mods.shift then parts[#parts + 1] = "shift" end
+  if mods.alt then parts[#parts + 1] = "alt" end
+  if mods.cmd then parts[#parts + 1] = "cmd" end
+  parts[#parts + 1] = key
+  return table.concat(parts, "+")
+end
+
+local reserved_key_combos = {
+  ["alt+t"] = true,
+  ["ctrl+shift+`"] = true,
+  ["ctrl+shift+c"] = PLATFORM ~= "Mac OS X",
+  ["ctrl+shift+v"] = true,
+  ["ctrl+shift+w"] = true,
+  ["cmd+c"] = PLATFORM == "Mac OS X",
+  ["cmd+v"] = PLATFORM == "Mac OS X",
+}
+
+local function should_forward_key_to_terminal(key, mods)
+  if not key or key == "" then return false end
+  mods = mods or {}
+  if reserved_key_combos[key_combo(key, mods)] then return false end
+  if mods.cmd then return false end
+  if mods.ctrl or mods.alt or mods.option or mods.altgr then return true end
+  if mods.shift and not printable_text_for_key(key, {}) then return true end
+  return false
 end
 
 local function clamp_cell(view, col, row)
@@ -311,12 +358,18 @@ end
 function TerminalView:on_key_pressed(key, scancode, repeated, modifiers)
   if not self.terminal then return false end
   local parts = {}
-  modifiers = modifiers or {}
+  modifiers = modifiers_from_keymap(modifiers)
   if modifiers.ctrl then parts[#parts + 1] = "ctrl" end
   if modifiers.shift then parts[#parts + 1] = "shift" end
   if modifiers.alt then parts[#parts + 1] = "alt" end
   parts[#parts + 1] = key
-  if self.terminal:send_key { key = key, mods = modifiers, repeated = repeated, scancode = scancode } then
+  if self.terminal:send_key {
+      key = key,
+      mods = modifiers,
+      text = printable_text_for_key(key, modifiers),
+      repeated = repeated,
+      scancode = scancode,
+    } then
     return true
   end
   local encoded = terminal_keys.fallback(table.concat(parts, "+"))
@@ -520,16 +573,26 @@ keymap.add_direct {
 if not keymap.ghostty_repeat_on_key_pressed then
   keymap.ghostty_repeat_on_key_pressed = keymap.on_key_pressed
   function keymap.on_key_pressed(key, scancode, repeated, ...)
+    local view = core.active_view
+    local mods = modifiers_from_keymap(keymap.modkeys)
+    local forwarded = false
+    if view and view.on_key_pressed and view.terminal and should_forward_key_to_terminal(key, mods) then
+      forwarded = true
+      if view:on_key_pressed(key, scancode, repeated, mods) then return true end
+    end
+
     local performed = keymap.ghostty_repeat_on_key_pressed(key, scancode, repeated, ...)
     if performed then return true end
 
-    local view = core.active_view
     if view and view.on_key_repeated and view.terminal and repeat_text_for_key(key, keymap.modkeys) then
       if repeated == true or pressed_repeat_keys[key] then
         pressed_repeat_keys[key] = true
         return view:on_key_repeated(key)
       end
       pressed_repeat_keys[key] = true
+    end
+    if not forwarded and view and view.on_key_pressed and view.terminal and should_forward_key_to_terminal(key, mods) then
+      return view:on_key_pressed(key, scancode, repeated, mods)
     end
     return false
   end

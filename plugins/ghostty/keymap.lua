@@ -46,12 +46,21 @@ local function ctrl_letter(combo)
   return string.char(key:byte() - string.byte("a") + 1)
 end
 
+local ctrl_special = {
+  ["ctrl+space"] = "\x00",
+  ["ctrl+["] = "\x1b",
+  ["ctrl+\\"] = "\x1c",
+  ["ctrl+]"] = "\x1d",
+  ["ctrl+^"] = "\x1e",
+  ["ctrl+_"] = "\x1f",
+}
+
 function keymap.fallback(combo, state)
   state = state or {}
   if state.cursor_application and app_cursor[combo] then
     return app_cursor[combo]
   end
-  return special[combo] or ctrl_letter(combo)
+  return special[combo] or ctrl_special[combo] or ctrl_letter(combo)
 end
 
 return keymap

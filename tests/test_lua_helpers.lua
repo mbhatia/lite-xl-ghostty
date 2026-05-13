@@ -67,6 +67,11 @@ check(seen == nil, "unsubscribe should remove handler")
 check(keymap.fallback("return") == "\r", "return fallback")
 check(keymap.fallback("shift+tab") == "\x1b[Z", "shift-tab fallback")
 check(keymap.fallback("ctrl+c") == "\003", "ctrl-letter fallback")
+check(keymap.fallback("ctrl+z") == "\026", "ctrl-z fallback")
+check(keymap.fallback("ctrl+space") == "\000", "ctrl-space fallback")
+check(keymap.fallback("ctrl+[") == "\027", "ctrl-left-bracket fallback")
+check(keymap.fallback("ctrl+\\") == "\028", "ctrl-backslash fallback")
+check(keymap.fallback("ctrl+]") == "\029", "ctrl-right-bracket fallback")
 check(keymap.fallback("up", { cursor_application = true }) == "\x1bOA", "application cursor fallback")
 
 local state = selection.new()
@@ -102,3 +107,64 @@ detected = { kind = "path", target = "src/main.c", line = 9, col = 2 }
 check(click.open(detected, "/cwd"), "file open")
 check(opened_doc == "/cwd/src/main.c", "file resolved against cwd")
 check(selection_line == 9 and selection_col == 2, "cursor selection set")
+
+package.preload["core.config"] = function()
+  return { plugins = { ghostty = {} } }
+end
+package.preload["core.style"] = function()
+  return {
+    code_font = {},
+    background = {},
+    caret = {},
+    text = {},
+    syntax = { normal = {} },
+  }
+end
+package.preload["core.common"] = function()
+  return {
+    merge = function(a, b)
+      local out = {}
+      for k, v in pairs(a or {}) do out[k] = v end
+      for k, v in pairs(b or {}) do out[k] = v end
+      return out
+    end,
+    color = function(value) return value end,
+  }
+end
+package.preload["core.command"] = function()
+  return { add = function() end }
+end
+package.preload["core.view"] = function()
+  local View = {}
+  function View:extend()
+    local class = { super = self }
+    class.__index = class
+    setmetatable(class, { __index = self })
+    return class
+  end
+  function View:new() end
+  return View
+end
+local core_keymap = {
+  modkeys = {},
+  map = {},
+  on_key_pressed = function() return true end,
+  on_key_released = function() return false end,
+  add = function() end,
+  add_direct = function() end,
+}
+package.preload["core.keymap"] = function() return core_keymap end
+package.preload["renderer"] = function() return {} end
+
+local forwarded
+package.loaded.core.active_view = {
+  terminal = {},
+  on_key_pressed = function(_, key_name, _, _, mods)
+    forwarded = { key = key_name, ctrl = mods.ctrl }
+    return true
+  end,
+}
+core_keymap.modkeys = { ctrl = true }
+require "plugins.ghostty.init"
+check(core_keymap.on_key_pressed("c", nil, false), "terminal ctrl-c should be handled")
+check(forwarded and forwarded.key == "c" and forwarded.ctrl, "terminal ctrl-c should be forwarded before editor keymap")

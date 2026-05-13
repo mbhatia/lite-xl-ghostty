@@ -381,6 +381,7 @@ static int f_mouse_tracking(lua_State *L) {
 static GhosttyKey key_from_name(const char *key) {
   if (!key) return GHOSTTY_KEY_UNIDENTIFIED;
   if (strcmp(key, "return") == 0 || strcmp(key, "enter") == 0) return GHOSTTY_KEY_ENTER;
+  if (strcmp(key, "keypad enter") == 0) return GHOSTTY_KEY_ENTER;
   if (strcmp(key, "backspace") == 0) return GHOSTTY_KEY_BACKSPACE;
   if (strcmp(key, "delete") == 0) return GHOSTTY_KEY_DELETE;
   if (strcmp(key, "tab") == 0) return GHOSTTY_KEY_TAB;
@@ -394,6 +395,17 @@ static GhosttyKey key_from_name(const char *key) {
   if (strcmp(key, "pageup") == 0) return GHOSTTY_KEY_PAGE_UP;
   if (strcmp(key, "pagedown") == 0) return GHOSTTY_KEY_PAGE_DOWN;
   if (strcmp(key, "insert") == 0) return GHOSTTY_KEY_INSERT;
+  if (strcmp(key, "grave") == 0 || strcmp(key, "`") == 0) return GHOSTTY_KEY_BACKQUOTE;
+  if (strcmp(key, "minus") == 0 || strcmp(key, "-") == 0) return GHOSTTY_KEY_MINUS;
+  if (strcmp(key, "equals") == 0 || strcmp(key, "equal") == 0 || strcmp(key, "=") == 0) return GHOSTTY_KEY_EQUAL;
+  if (strcmp(key, "left bracket") == 0 || strcmp(key, "[") == 0) return GHOSTTY_KEY_BRACKET_LEFT;
+  if (strcmp(key, "right bracket") == 0 || strcmp(key, "]") == 0) return GHOSTTY_KEY_BRACKET_RIGHT;
+  if (strcmp(key, "backslash") == 0 || strcmp(key, "\\") == 0) return GHOSTTY_KEY_BACKSLASH;
+  if (strcmp(key, "semicolon") == 0 || strcmp(key, ";") == 0) return GHOSTTY_KEY_SEMICOLON;
+  if (strcmp(key, "quote") == 0 || strcmp(key, "'") == 0) return GHOSTTY_KEY_QUOTE;
+  if (strcmp(key, "comma") == 0 || strcmp(key, ",") == 0) return GHOSTTY_KEY_COMMA;
+  if (strcmp(key, "period") == 0 || strcmp(key, ".") == 0) return GHOSTTY_KEY_PERIOD;
+  if (strcmp(key, "slash") == 0 || strcmp(key, "/") == 0) return GHOSTTY_KEY_SLASH;
   if (key[0] == 'f') {
     int n = atoi(key + 1);
     if (n >= 1 && n <= 12) return (GhosttyKey)(GHOSTTY_KEY_F1 + (n - 1));
@@ -417,6 +429,9 @@ static GhosttyMods mods_from_table(lua_State *L, int index) {
   if (lua_toboolean(L, -1)) mods |= GHOSTTY_MODS_CTRL;
   lua_pop(L, 1);
   lua_getfield(L, index, "alt");
+  if (lua_toboolean(L, -1)) mods |= GHOSTTY_MODS_ALT;
+  lua_pop(L, 1);
+  lua_getfield(L, index, "option");
   if (lua_toboolean(L, -1)) mods |= GHOSTTY_MODS_ALT;
   lua_pop(L, 1);
   lua_getfield(L, index, "cmd");
@@ -447,6 +462,9 @@ static int f_send_key(lua_State *L) {
   lua_getfield(L, 2, "text");
   size_t text_len = 0;
   const char *text = lua_tolstring(L, -1, &text_len);
+  lua_getfield(L, 2, "repeated");
+  bool repeated = lua_toboolean(L, -1);
+  lua_pop(L, 1);
 
   LxlGhosttyTerminal *t = ud->terminal;
   char buf[256];
@@ -456,7 +474,7 @@ static int f_send_key(lua_State *L) {
   GhosttyOptionAsAlt option_as_alt = GHOSTTY_OPTION_AS_ALT_TRUE;
   ghostty_key_encoder_setopt(t->key_encoder, GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT, &option_as_alt);
   ghostty_key_event_set_key(t->key_event, gkey);
-  ghostty_key_event_set_action(t->key_event, GHOSTTY_KEY_ACTION_PRESS);
+  ghostty_key_event_set_action(t->key_event, repeated ? GHOSTTY_KEY_ACTION_REPEAT : GHOSTTY_KEY_ACTION_PRESS);
   ghostty_key_event_set_mods(t->key_event, mods);
   ghostty_key_event_set_consumed_mods(t->key_event, 0);
   ghostty_key_event_set_utf8(t->key_event, text, text_len);
