@@ -145,6 +145,9 @@ package.preload["core.view"] = function()
   function View:new() end
   return View
 end
+package.preload["core.emptyview"] = function()
+  return function() return {} end
+end
 local core_keymap = {
   modkeys = {},
   map = {},

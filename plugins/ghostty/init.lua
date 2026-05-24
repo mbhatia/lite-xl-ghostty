@@ -6,6 +6,7 @@ local keymap = require "core.keymap"
 local style = require "core.style"
 local common = require "core.common"
 local View = require "core.view"
+local EmptyView = require "core.emptyview"
 local renderer = require "renderer"
 local system = require "system"
 
@@ -146,6 +147,7 @@ end
 
 function TerminalView:new(options)
   TerminalView.super.new(self)
+  self.ghostty_terminal_view = true
   self.options = common.merge(config.plugins.ghostty, options or {})
   self.title = self.options.title or "Ghostty"
   self.cwd = self.options.cwd or project.root()
@@ -194,6 +196,9 @@ function TerminalView:set_target_size(axis, value)
 end
 
 function TerminalView:close()
+  if core.ghostty_project_unregister_tab then
+    core.ghostty_project_unregister_tab(self)
+  end
   if self.terminal then
     self.terminal:close()
     events.emit("terminal-closed", { view = self, terminal = self.terminal })
@@ -203,6 +208,130 @@ function TerminalView:close()
     core.ghostty_view = nil
     core.ghostty_view_node = nil
     core.ghostty_view_closed = nil
+  end
+end
+
+core.ghostty_project_tabs = core.ghostty_project_tabs or {}
+
+local function project_key(path)
+  return path or core.project_dir or project.root() or ""
+end
+
+local function tab_bucket(path)
+  local key = project_key(path)
+  local bucket = core.ghostty_project_tabs[key]
+  if not bucket then
+    bucket = { tabs = {} }
+    core.ghostty_project_tabs[key] = bucket
+  end
+  return bucket
+end
+
+local function is_terminal_tab(view)
+  return view ~= core.ghostty_view
+    and view
+    and view.terminal
+    and (view.ghostty_terminal_view or view:is(TerminalView))
+end
+
+local function contains(t, item)
+  for _, value in ipairs(t) do
+    if value == item then return true end
+  end
+  return false
+end
+
+local function register_tab(view, path)
+  if not view or view == core.ghostty_view then return end
+  view.ghostty_project = project_key(path)
+  local tabs = tab_bucket(view.ghostty_project).tabs
+  if not contains(tabs, view) then tabs[#tabs + 1] = view end
+end
+
+local function unregister_tab(view)
+  if not view then return end
+  for _, bucket in pairs(core.ghostty_project_tabs) do
+    local i = 1
+    while i <= #bucket.tabs do
+      if bucket.tabs[i] == view then
+        table.remove(bucket.tabs, i)
+      else
+        i = i + 1
+      end
+    end
+    if bucket.active == view then bucket.active = nil end
+  end
+end
+
+local function visible_tabs()
+  local tabs = {}
+  for _, view in ipairs(core.root_view.root_node:get_children()) do
+    if is_terminal_tab(view) then tabs[#tabs + 1] = view end
+  end
+  return tabs
+end
+
+local function detach_tab(view)
+  local root = core.root_view.root_node
+  local node = root:get_node_for_view(view)
+  if not node then return end
+  if node == root and node.type == "leaf" and #node.views == 1 then
+    node.views = {}
+    node:add_view(EmptyView())
+  else
+    node:remove_view(root, view)
+  end
+end
+
+local function stash_tabs(path)
+  local bucket = tab_bucket(path)
+  bucket.tabs = visible_tabs()
+  bucket.active = core.active_view
+  for _, view in ipairs(bucket.tabs) do
+    view.ghostty_project = project_key(path)
+    detach_tab(view)
+  end
+  if #bucket.tabs > 0 then core.redraw = true end
+end
+
+local function restore_tabs(path)
+  local bucket = tab_bucket(path)
+  local previous_active = core.active_view
+  local node
+  local restored = false
+  for _, view in ipairs(bucket.tabs) do
+    if view.terminal and not core.root_view.root_node:get_node_for_view(view) then
+      node = node or core.root_view:get_active_node_default()
+      node:add_view(view)
+      restored = true
+    end
+  end
+  local active = bucket.active
+  local active_node = active and core.root_view.root_node:get_node_for_view(active)
+  local previous_node = previous_active and core.root_view.root_node:get_node_for_view(previous_active)
+  if active_node then
+    active_node:set_active_view(active)
+  elseif previous_node then
+    previous_node:set_active_view(previous_active)
+  end
+  if restored then core.redraw = true end
+end
+
+core.ghostty_project_unregister_tab = unregister_tab
+core.ghostty_project_stash_tabs = stash_tabs
+core.ghostty_project_restore_tabs = restore_tabs
+
+if not core.ghostty_open_folder_project_original then
+  core.ghostty_open_folder_project_original = core.open_folder_project
+  function core.open_folder_project(path)
+    local before = core.project_dir
+    if core.ghostty_project_stash_tabs then
+      core.ghostty_project_stash_tabs(before)
+    end
+    core.ghostty_open_folder_project_original(path)
+    if core.ghostty_project_restore_tabs then
+      core.ghostty_project_restore_tabs(core.project_dir ~= before and core.project_dir or before)
+    end
   end
 end
 
@@ -452,6 +581,7 @@ end
 
 local function open_tab(options)
   local view = TerminalView(options or {})
+  register_tab(view, core.project_dir)
   core.root_view:get_active_node_default():add_view(view)
   return view
 end
