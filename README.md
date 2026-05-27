@@ -1,6 +1,11 @@
-This is a libghostty-based terminal emulator plugin for [lite-xl](https://lite-xl.com/).
-We will be using the [ghostty-fork](https://github.com/manaflow-ai/ghostty) from `cmux`'s author as I plan to be able to build some similar features for agent notifications etc.
+**This is beta software, which is mostly vibe-coded and provided as-is.**
 
+I have been using it personally on MacOS and it works pretty well.
+* It does include the ghostty terminfo.
+* It does not ship the JetBrainsMono Nerd font for extended unicode characters.
+  * You can update core.style.code_font to get the enhanced unicode characters for your prompts.
+
+This is a libghostty-based terminal emulator plugin for [lite-xl](https://lite-xl.com/).
 It is inspired by [lite-xl-terminal](https://github.com/adamharrison/lite-xl-terminal).
 The main issue I have with the existing lite-xl-terminal plugin is that it did not seem to support latest coding agent TUIs.
 
