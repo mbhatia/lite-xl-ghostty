@@ -84,6 +84,9 @@ New sessions default to the bundled Ghostty terminfo database with
 `TERM=xterm-ghostty`. Override with `config.plugins.ghostty.term`,
 `config.plugins.ghostty.terminfo`, or per-session `env`.
 
+By default, terminal text follows `style.code_font`, so Lite XL font and scale
+changes are inherited unless `config.plugins.ghostty.font` is set.
+
 Events are delivered on the Lite XL main thread:
 
 ```lua

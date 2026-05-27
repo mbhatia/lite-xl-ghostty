@@ -7,7 +7,6 @@ local defaults = {
   term = "xterm-ghostty",
   shell = default_shell,
   drawer_height = 300,
-  font = style.code_font,
   max_scrollback = 10000,
   close_on_exit = "clean_exit",
   agent_close_on_exit = "never",
