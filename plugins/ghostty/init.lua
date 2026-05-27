@@ -20,6 +20,9 @@ local project = require "plugins.ghostty.project"
 local ok, native = pcall(require, "libraries.ghostty_lxl")
 if not ok then native = nil end
 
+local plugin_dir = (debug.getinfo(1, "S").source or ""):match("^@(.+)[/\\]init%.lua$")
+local bundled_terminfo = plugin_dir and (plugin_dir .. package.config:sub(1, 1) .. "terminfo")
+
 local TerminalView = View:extend()
 
 local function command_from_options(options)
@@ -165,6 +168,8 @@ function TerminalView:new(options)
 
   if native then
     local command_value, shell = command_from_options(self.options)
+    local terminfo = self.options.terminfo
+    if terminfo == nil then terminfo = bundled_terminfo end
     self.terminal = native.new {
       cols = 80,
       rows = 24,
@@ -174,7 +179,7 @@ function TerminalView:new(options)
       command = command_value,
       shell = shell,
       cwd = self.cwd,
-      env = common.merge({ TERM = self.options.term }, self.options.env or {}),
+      env = common.merge({ TERM = self.options.term, TERMINFO = terminfo }, self.options.env or {}),
       osc_max_bytes = self.options.osc_max_bytes,
     }
     events.emit("terminal-created", { view = self, terminal = self.terminal })

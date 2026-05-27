@@ -108,8 +108,9 @@ check(click.open(detected, "/cwd"), "file open")
 check(opened_doc == "/cwd/src/main.c", "file resolved against cwd")
 check(selection_line == 9 and selection_col == 2, "cursor selection set")
 
+local config_stub = { plugins = { ghostty = {} } }
 package.preload["core.config"] = function()
-  return { plugins = { ghostty = {} } }
+  return config_stub
 end
 package.preload["core.style"] = function()
   return {

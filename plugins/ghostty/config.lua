@@ -4,7 +4,7 @@ local common = require "core.common"
 
 local default_shell = os.getenv("SHELL") or "/bin/sh"
 local defaults = {
-  term = "xterm-256color",
+  term = "xterm-ghostty",
   shell = default_shell,
   drawer_height = 300,
   font = style.code_font,
@@ -29,6 +29,7 @@ local defaults = {
 defaults.config_spec = {
   name = "Ghostty Terminal",
   { label = "Terminal Type", path = "term", type = "STRING", default = defaults.term },
+  { label = "Terminfo Directory", path = "terminfo", type = "STRING" },
   { label = "Shell", path = "shell", type = "STRING", default = defaults.shell },
   { label = "Terminal Drawer Height", path = "drawer_height", type = "NUMBER", default = defaults.drawer_height },
   { label = "Scrollback Lines", path = "max_scrollback", type = "NUMBER", default = defaults.max_scrollback },

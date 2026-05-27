@@ -76,10 +76,13 @@ ghostty.open_tab({
   kind = "agent",
   command = { "codex" },
   cwd = core.root_project().path,
-  env = { TERM = "xterm-256color" },
   close_on_exit = "never"
 })
 ```
+
+New sessions default to the bundled Ghostty terminfo database with
+`TERM=xterm-ghostty`. Override with `config.plugins.ghostty.term`,
+`config.plugins.ghostty.terminfo`, or per-session `env`.
 
 Events are delivered on the Lite XL main thread:
 
