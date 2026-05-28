@@ -4,20 +4,30 @@
       "id": "ghostty",
       "version": "0.1.0",
       "mod_version": "3",
+      "type": "plugin",
       "path": "plugins/ghostty",
       "description": "A Lite XL integrated terminal backed by Ghostty's libghostty-vt.",
       "dependencies": {
-        "ghostty_lxl": {}
-      },
-      "files": []
+        "ghostty_lxl": {
+          "version": ">=0.1.0"
+        }
+      }
     },
     {
       "id": "ghostty_lxl",
       "version": "0.1.0",
+      "mod_version": "3",
       "type": "library",
       "path": "libraries/ghostty_lxl",
       "description": "Native Ghostty terminal module for lite-xl-ghostty.",
-      "files": []
+      "files": [
+        {
+          "arch": "aarch64-darwin",
+          "url": "https://github.com/mbhatia/lite-xl-ghostty/releases/download/v0.1.0/ghostty_lxl.aarch64-darwin.lib",
+          "checksum": "REPLACE_WITH_AARCH64_DARWIN_SHA256",
+          "path": "init.lib"
+        }
+      ]
     }
   ]
 }

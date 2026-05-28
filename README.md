@@ -29,13 +29,25 @@ Kitty graphics, Windows/ConPTY, terminal search UI, and profile management are i
 ## Requirements
 
 - Lite XL 2.1.x.
-- Zig 0.15.2 or newer.
-- CMake 3.19 or newer.
-- Ninja.
-- C11 compiler.
-- macOS SDK or Linux build essentials.
+- For binary installs: macOS arm64 (`aarch64-darwin`) for the initial release.
+- For source builds: Zig 0.15.2, CMake 3.19 or newer, Ninja, a C11 compiler, and the macOS SDK or Linux build essentials.
 
 The Lite XL plugin API header is vendored at `lib/lite-xl/resources/include/lite_xl_plugin_api.h` for source builds. You can override it with CMake's `LITE_XL_INCLUDE_DIR` cache variable if needed.
+
+## Install with LPM
+
+The first binary release target is macOS arm64 only:
+
+```sh
+lpm add https://github.com/mbhatia/lite-xl-ghostty.git
+lpm install ghostty
+```
+
+`ghostty` depends on the `ghostty_lxl` library addon. On `aarch64-darwin`,
+LPM downloads the release asset `ghostty_lxl.aarch64-darwin.lib` and installs it
+as `libraries/ghostty_lxl/init.lib`, which is what the Lua plugin requires.
+
+Intel macOS, Linux, and Windows binary packages are not published yet.
 
 ## Build
 
@@ -55,6 +67,22 @@ Useful options:
 ```
 
 In environments without CMake, the portable unit-test slice can still be compiled directly with `cc`; see `execplans/mvp-implementation.md` for the exact commands used during implementation.
+
+## Release notes
+
+The `release-binaries` GitHub Actions workflow builds only on a native arm64
+macOS runner (`macos-15`). It checks out the pinned Ghostty source used by this
+repo's CMake integration, builds and tests the native module, stages
+`dist/ghostty_lxl.aarch64-darwin.lib`, writes
+`dist/ghostty_lxl.aarch64-darwin.lib.sha256`, and uploads both as workflow
+artifacts. Tag pushes matching `v*` also upload those files to the GitHub
+release.
+
+After the first `v0.1.0` tag workflow succeeds, and before announcing LPM
+installs, replace
+`REPLACE_WITH_AARCH64_DARWIN_SHA256` in `manifest.json` with the first field
+from the CI-produced `ghostty_lxl.aarch64-darwin.lib.sha256` file for the same
+tag. Do not reuse the tag with a different binary after users can install it.
 
 ## Usage
 
