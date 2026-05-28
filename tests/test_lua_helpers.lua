@@ -144,6 +144,7 @@ package.preload["core.view"] = function()
     return class
   end
   function View:new() end
+  function View:update() end
   return View
 end
 package.preload["core.emptyview"] = function()
@@ -172,3 +173,42 @@ core_keymap.modkeys = { ctrl = true }
 require "plugins.ghostty.init"
 check(core_keymap.on_key_pressed("c", nil, false), "terminal ctrl-c should be handled")
 check(forwarded and forwarded.key == "c" and forwarded.ctrl, "terminal ctrl-c should be forwarded before editor keymap")
+
+local ghostty = require "plugins.ghostty.init"
+local view = setmetatable({}, ghostty.TerminalView)
+ghostty.TerminalView.new(view, {})
+local closed_terminal = false
+view.terminal = {
+  close = function()
+    closed_terminal = true
+  end
+}
+local closed_event
+local off_closed = ghostty.on("terminal-closed", function(event)
+  closed_event = event
+end)
+local removed_view = false
+view:try_close(function()
+  removed_view = true
+end)
+off_closed()
+check(closed_terminal, "try_close should close terminal")
+check(closed_event and closed_event.view == view, "try_close should emit terminal-closed")
+check(removed_view, "try_close should remove view")
+
+local update_view = setmetatable({}, ghostty.TerminalView)
+ghostty.TerminalView.new(update_view, { font = { get_width = function() return 8 end, get_height = function() return 16 end } })
+update_view.size = { x = 80, y = 24 }
+local off_exited = ghostty.on("terminal-exited", function(event)
+  event.view:close()
+end)
+update_view.terminal = {
+  resize = function() end,
+  poll_events = function()
+    return { { kind = "terminal-exited", code = 0, signal = 0 } }
+  end,
+  close = function() end,
+}
+update_view:update()
+off_exited()
+check(update_view.terminal == nil, "update should tolerate event handlers closing terminal")

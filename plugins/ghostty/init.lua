@@ -216,6 +216,11 @@ function TerminalView:close()
   end
 end
 
+function TerminalView:try_close(do_close)
+  self:close()
+  do_close()
+end
+
 core.ghostty_project_tabs = core.ghostty_project_tabs or {}
 
 local function project_key(path)
@@ -397,6 +402,7 @@ function TerminalView:update()
   for _, event in ipairs(self.terminal:poll_events()) do
     emit_native_event(self, event)
   end
+  if not self.terminal then return end
 
   if self.terminal:is_dirty() or not self.snapshot then
     self.snapshot = self.terminal:update_render()

@@ -161,6 +161,29 @@ static void push_exit_event(LxlGhosttyTerminal *t, int status) {
   lxl_ghostty_event_queue_push(&t->events, &event);
 }
 
+static bool reap_child_exit(LxlGhosttyTerminal *t, int retries) {
+  if (!atomic_load(&t->child_alive)) return true;
+  for (int i = 0; i <= retries && !atomic_load(&t->stopping); i++) {
+    int status = 0;
+    pid_t result = waitpid(t->child_pid, &status, WNOHANG);
+    if (result == t->child_pid) {
+      t->exit_status = status;
+      atomic_store(&t->child_alive, false);
+      push_exit_event(t, status);
+      return true;
+    }
+    if (result < 0) {
+      if (errno == EINTR) {
+        i--;
+        continue;
+      }
+      return false;
+    }
+    if (i < retries) usleep(10000);
+  }
+  return false;
+}
+
 static void *reader_main(void *arg) {
   LxlGhosttyTerminal *t = (LxlGhosttyTerminal *)arg;
   char buf[READ_BUF_SIZE];
@@ -173,14 +196,7 @@ static void *reader_main(void *arg) {
       break;
     }
     if (pr == 0) {
-      int status = 0;
-      pid_t result = waitpid(t->child_pid, &status, WNOHANG);
-      if (result == t->child_pid) {
-        t->exit_status = status;
-        atomic_store(&t->child_alive, false);
-        push_exit_event(t, status);
-        break;
-      }
+      if (reap_child_exit(t, 0)) break;
       continue;
     }
 
@@ -196,13 +212,7 @@ static void *reader_main(void *arg) {
         continue;
       }
       if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
-      int status = 0;
-      pid_t result = waitpid(t->child_pid, &status, WNOHANG);
-      if (result == t->child_pid) {
-        t->exit_status = status;
-        atomic_store(&t->child_alive, false);
-        push_exit_event(t, status);
-      }
+      reap_child_exit(t, 100);
       atomic_store(&t->stopping, true);
       break;
     }
