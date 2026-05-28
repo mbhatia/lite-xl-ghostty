@@ -24,7 +24,7 @@
         {
           "arch": "aarch64-darwin",
           "url": "https://github.com/mbhatia/lite-xl-ghostty/releases/download/v0.1.0/ghostty_lxl.aarch64-darwin.lib",
-          "checksum": "REPLACE_WITH_AARCH64_DARWIN_SHA256",
+          "checksum": "2d60df7a0d1cb8ea47c0eb1b3fb0ab24eab652d098189a4857e366cc22ad2c18",
           "path": "init.lib"
         }
       ]

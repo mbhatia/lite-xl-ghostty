@@ -78,11 +78,9 @@ repo's CMake integration, builds and tests the native module, stages
 artifacts. Tag pushes matching `v*` also upload those files to the GitHub
 release.
 
-After the first `v0.1.0` tag workflow succeeds, and before announcing LPM
-installs, replace
-`REPLACE_WITH_AARCH64_DARWIN_SHA256` in `manifest.json` with the first field
-from the CI-produced `ghostty_lxl.aarch64-darwin.lib.sha256` file for the same
-tag. Do not reuse the tag with a different binary after users can install it.
+The `v0.1.0` manifest points at the published release asset and includes its
+SHA-256 checksum. Do not reuse a published tag with a different binary after
+users can install it.
 
 ## Usage
 
