@@ -12,34 +12,70 @@ permissions:
   contents: write
 
 env:
-  LPM_ARCH: aarch64-darwin
   GHOSTTY_REPOSITORY: "https://github.com/manaflow-ai/ghostty.git"
   GHOSTTY_REF: "xcframework-6b8d558cea313b09c10ac107254d6ee41a5044d9"
   GHOSTTY_COMMIT: "41ab6c5ab650465dd65c9957ae0a95225e2c1048"
   ZIG_VERSION: "0.15.2"
 
 jobs:
-  aarch64-darwin:
-    name: Build ghostty_lxl for aarch64-darwin
-    runs-on: macos-15
+  build:
+    name: Build ghostty_lxl for ${{ matrix.lpm_arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lpm_arch: aarch64-darwin
+            runner: macos-15
+            os: macos
+            machine_arch: arm64
+            file_arch_pattern: arm64
+            module_suffix: lib
+          - lpm_arch: x86_64-darwin
+            runner: macos-15-intel
+            os: macos
+            machine_arch: x86_64
+            file_arch_pattern: x86_64
+            module_suffix: lib
+          - lpm_arch: x86_64-linux
+            runner: ubuntu-24.04
+            os: linux
+            machine_arch: x86_64
+            file_arch_pattern: x86-64
+            module_suffix: so
+          - lpm_arch: aarch64-linux
+            runner: ubuntu-24.04-arm
+            os: linux
+            machine_arch: aarch64
+            file_arch_pattern: aarch64
+            module_suffix: so
 
     steps:
       - name: Check out lite-xl-ghostty
         uses: actions/checkout@v4
 
-      - name: Verify native arm64 runner
+      - name: Verify native runner
         run: |
           set -euo pipefail
-          test "$(uname -m)" = "arm64"
-          xcode-select --print-path
+          test "$(uname -m)" = "${{ matrix.machine_arch }}"
+          if [ "${{ matrix.os }}" = "macos" ]; then
+            xcode-select --print-path
+          fi
 
       - name: Set up Zig
         uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
 
-      - name: Install build tools
+      - name: Install macOS build tools
+        if: matrix.os == 'macos'
         run: brew install cmake ninja gettext
+
+      - name: Install Linux build tools
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build gettext pkg-config
 
       - name: Fetch pinned Ghostty source
         run: |
@@ -63,23 +99,28 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp libraries/ghostty_lxl/init.lib "dist/ghostty_lxl.${LPM_ARCH}.lib"
-          file "dist/ghostty_lxl.${LPM_ARCH}.lib"
-          lipo -archs "dist/ghostty_lxl.${LPM_ARCH}.lib" | grep -qw arm64
-          shasum -a 256 "dist/ghostty_lxl.${LPM_ARCH}.lib" \
-            | tee "dist/ghostty_lxl.${LPM_ARCH}.lib.sha256"
+          asset="ghostty_lxl.${{ matrix.lpm_arch }}.${{ matrix.module_suffix }}"
+          cp "libraries/ghostty_lxl/init.${{ matrix.module_suffix }}" "dist/${asset}"
+          file "dist/${asset}"
+          if [ "${{ matrix.os }}" = "macos" ]; then
+            lipo -archs "dist/${asset}" | grep -qw "${{ matrix.machine_arch }}"
+            shasum -a 256 "dist/${asset}" | tee "dist/${asset}.sha256"
+          else
+            file "dist/${asset}" | grep -qi "${{ matrix.file_arch_pattern }}"
+            sha256sum "dist/${asset}" | tee "dist/${asset}.sha256"
+          fi
           {
-            echo "### ${LPM_ARCH} release asset"
+            echo "### ${{ matrix.lpm_arch }} release asset"
             echo
             echo "\`\`\`"
-            cat "dist/ghostty_lxl.${LPM_ARCH}.lib.sha256"
+            cat "dist/${asset}.sha256"
             echo "\`\`\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ghostty_lxl-${{ env.LPM_ARCH }}
+          name: ghostty_lxl-${{ matrix.lpm_arch }}
           path: dist/*
           if-no-files-found: error
 
