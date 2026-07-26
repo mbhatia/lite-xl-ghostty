@@ -177,6 +177,40 @@ check(forwarded and forwarded.key == "c" and forwarded.ctrl, "terminal ctrl-c sh
 local ghostty = require "plugins.ghostty.init"
 local view = setmetatable({}, ghostty.TerminalView)
 ghostty.TerminalView.new(view, {})
+local dropped_text
+local drop_view = setmetatable({
+  terminal = {
+    input_text = function(_, text)
+      dropped_text = text
+    end,
+  },
+}, ghostty.TerminalView)
+local special_path = "/tmp/back\\slash space()[]{}<>\"'`!#$&;|*?file"
+local escaped_path = "/tmp/back\\\\slash\\ space\\(\\)\\[\\]\\{\\}\\<\\>\\\"\\'\\`\\!\\#\\$\\&\\;\\|\\*\\?file "
+check(drop_view:on_file_dropped(special_path), "valid file drop should be consumed")
+check(dropped_text == escaped_path, "file drop should escape shell-special path characters and append a space")
+
+local control_paths = {
+  { name = "line feed", path = "/tmp/line\nfeed" },
+  { name = "carriage return", path = "/tmp/carriage\rreturn" },
+  { name = "tab", path = "/tmp/tab\tfile" },
+  { name = "escape", path = "/tmp/escape\27file" },
+  { name = "delete", path = "/tmp/delete\127file" },
+}
+for _, control_path in ipairs(control_paths) do
+  dropped_text = nil
+  check(not drop_view:on_file_dropped(control_path.path), control_path.name .. " file drop should fall back")
+  check(dropped_text == nil, control_path.name .. " file drop should not write terminal input")
+end
+
+dropped_text = nil
+check(not drop_view:on_file_dropped(""), "empty file drop should fall back")
+check(not drop_view:on_file_dropped(nil), "invalid file drop should fall back")
+check(dropped_text == nil, "invalid file drop should not write terminal input")
+
+local missing_terminal_view = setmetatable({}, ghostty.TerminalView)
+check(not missing_terminal_view:on_file_dropped("/tmp/file"), "file drop without terminal should fall back")
+
 local closed_terminal = false
 view.terminal = {
   close = function()
