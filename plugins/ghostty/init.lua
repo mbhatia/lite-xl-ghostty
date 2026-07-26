@@ -100,6 +100,36 @@ local function repeat_text_for_key(key, mods)
   return printable_text_for_key(key, mods)
 end
 
+local escaped_drop_path_characters = {
+  ["\\"] = true,
+  [" "] = true,
+  ["("] = true,
+  [")"] = true,
+  ["["] = true,
+  ["]"] = true,
+  ["{"] = true,
+  ["}"] = true,
+  ["<"] = true,
+  [">"] = true,
+  ["\""] = true,
+  ["'"] = true,
+  ["`"] = true,
+  ["!"] = true,
+  ["#"] = true,
+  ["$"] = true,
+  ["&"] = true,
+  [";"] = true,
+  ["|"] = true,
+  ["*"] = true,
+  ["?"] = true,
+}
+
+local function escape_drop_path(path)
+  return (path:gsub(".", function(character)
+    return escaped_drop_path_characters[character] and ("\\" .. character) or character
+  end))
+end
+
 local function modifiers_from_keymap(modifiers)
   local source = modifiers or keymap.modkeys or {}
   return {
@@ -484,6 +514,13 @@ end
 
 function TerminalView:on_text_input(text)
   if self.terminal and text and text ~= "" then self.terminal:input_text(text) end
+end
+
+function TerminalView:on_file_dropped(filename)
+  if not self.terminal or type(filename) ~= "string" or filename == "" then return false end
+  if filename:find("[%z\1-\31\127]") then return false end
+  self.terminal:input_text(escape_drop_path(filename) .. " ")
+  return true
 end
 
 function TerminalView:on_key_repeated(key)
