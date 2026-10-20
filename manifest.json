@@ -24,25 +24,25 @@
         {
           "arch": "aarch64-darwin",
           "url": "https://github.com/mbhatia/lite-xl-ghostty/releases/download/v0.2.1/ghostty_lxl.aarch64-darwin.lib",
-          "checksum": "REPLACE_WITH_AARCH64_DARWIN_SHA256",
+          "checksum": "ec55e9715f717b980a008a7a140bb39c04c3353e5ee1fcae96123e942773d527",
           "path": "init.lib"
         },
         {
           "arch": "x86_64-darwin",
           "url": "https://github.com/mbhatia/lite-xl-ghostty/releases/download/v0.2.1/ghostty_lxl.x86_64-darwin.lib",
-          "checksum": "REPLACE_WITH_X86_64_DARWIN_SHA256",
+          "checksum": "9d303942093019f79dde6f790f753b77265b26ef66302e526a2a6f944d9d9f8e",
           "path": "init.lib"
         },
         {
           "arch": "x86_64-linux",
           "url": "https://github.com/mbhatia/lite-xl-ghostty/releases/download/v0.2.1/ghostty_lxl.x86_64-linux.so",
-          "checksum": "REPLACE_WITH_X86_64_LINUX_SHA256",
+          "checksum": "11776179bfce8a96e343d4e5cada4b2b4cd666dfc99a62f1240eb02104650f74",
           "path": "init.so"
         },
         {
           "arch": "aarch64-linux",
           "url": "https://github.com/mbhatia/lite-xl-ghostty/releases/download/v0.2.1/ghostty_lxl.aarch64-linux.so",
-          "checksum": "REPLACE_WITH_AARCH64_LINUX_SHA256",
+          "checksum": "10eb9cfef622defd7a0e5b3501a7f13dfc3b37b6ee539c2f522f57584eba97b0",
           "path": "init.so"
         }
       ]
