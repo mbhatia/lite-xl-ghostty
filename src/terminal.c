@@ -18,7 +18,7 @@
 #define DEFAULT_ROWS 24
 #define DEFAULT_CELL_WIDTH 8
 #define DEFAULT_CELL_HEIGHT 16
-#define VERSION_STRING "lite-xl-ghostty 0.1.0"
+#define VERSION_STRING "lite-xl-ghostty 0.2.1"
 
 static void push_simple_event(LxlGhosttyTerminal *t, LxlGhosttyEventKind kind) {
   LxlGhosttyEvent event = { .kind = kind };
