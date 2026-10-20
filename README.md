@@ -102,6 +102,11 @@ Default keys:
 - `ctrl+shift+v`: paste
 - `ctrl+shift+w`: close terminal
 
+Large pastes are queued and sent as the receiving program consumes input, without
+waiting for it on the editor thread. The program's own input limits still apply:
+canonical (line-buffered) terminal input can limit individual line lengths, even
+though the plugin does not impose a paste-size cap.
+
 Programmatic API:
 
 ```lua

@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #define READ_BUF_SIZE (16 * 1024)
+#define WRITE_BUDGET (64 * 1024)
 #define DEFAULT_SCROLLBACK 10000
 #define DEFAULT_COLS 80
 #define DEFAULT_ROWS 24
@@ -24,14 +25,49 @@ static void push_simple_event(LxlGhosttyTerminal *t, LxlGhosttyEventKind kind) {
   lxl_ghostty_event_queue_push(&t->events, &event);
 }
 
+static void clear_pending_writes(LxlGhosttyTerminal *t) {
+  LxlGhosttyPendingWrite *write = t->write_head;
+  while (write) {
+    LxlGhosttyPendingWrite *next = write->next;
+    free(write->data);
+    free(write);
+    write = next;
+  }
+  t->write_head = t->write_tail = NULL;
+}
+
+/* Called with write_mu held. Keep queue order and never wait for PTY capacity. */
+static bool flush_pending_writes(LxlGhosttyTerminal *t) {
+  size_t budget = WRITE_BUDGET;
+  while (t->write_head && budget > 0) {
+    LxlGhosttyPendingWrite *pending = t->write_head;
+    size_t remaining = pending->len - pending->offset;
+    if (remaining > budget) remaining = budget;
+    ssize_t n = write(t->pty_fd, pending->data + pending->offset, remaining);
+    if (n > 0) {
+      pending->offset += (size_t)n;
+      budget -= (size_t)n;
+      if (pending->offset == pending->len) {
+        t->write_head = pending->next;
+        if (!t->write_head) t->write_tail = NULL;
+        free(pending->data);
+        free(pending);
+      }
+      continue;
+    }
+    if (n < 0 && errno == EINTR) continue;
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return true;
+    clear_pending_writes(t);
+    return false;
+  }
+  return true;
+}
+
 static void effect_write_pty(GhosttyTerminal terminal, void *userdata, const uint8_t *data, size_t len) {
   (void)terminal;
   LxlGhosttyTerminal *t = (LxlGhosttyTerminal *)userdata;
   if (!t || t->pty_fd < 0 || !data || len == 0) return;
-  ssize_t written = write(t->pty_fd, data, len);
-  if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-    (void)write(t->pty_fd, data, len);
-  }
+  (void)lxl_ghostty_terminal_write(t, (const char *)data, len);
 }
 
 static void effect_bell(GhosttyTerminal terminal, void *userdata) {
@@ -189,7 +225,10 @@ static void *reader_main(void *arg) {
   char buf[READ_BUF_SIZE];
 
   while (!atomic_load(&t->stopping)) {
-    struct pollfd pfd = { .fd = t->pty_fd, .events = POLLIN | POLLHUP | POLLERR };
+    pthread_mutex_lock(&t->write_mu);
+    short write_events = t->write_head ? POLLOUT : 0;
+    pthread_mutex_unlock(&t->write_mu);
+    struct pollfd pfd = { .fd = t->pty_fd, .events = POLLIN | POLLHUP | POLLERR | write_events };
     int pr = poll(&pfd, 1, 50);
     if (pr < 0) {
       if (errno == EINTR) continue;
@@ -200,6 +239,17 @@ static void *reader_main(void *arg) {
       continue;
     }
 
+    if (pfd.revents & POLLOUT) {
+      if (!lxl_ghostty_terminal_flush_writes(t)) {
+        atomic_store(&t->stopping, true);
+        break;
+      }
+    }
+
+    /* Service input in bounded batches so a continuously chatty child cannot
+       starve queued output. */
+    int reads = 0;
+
     for (;;) {
       ssize_t n = read(t->pty_fd, buf, sizeof(buf));
       if (n > 0) {
@@ -209,6 +259,7 @@ static void *reader_main(void *arg) {
         emit_string_change(t, GHOSTTY_TERMINAL_DATA_PWD, &t->last_pwd, LXL_GHOSTTY_EVENT_CWD);
         pthread_mutex_unlock(&t->mu);
         atomic_store(&t->dirty, true);
+        if (++reads >= 16) break;
         continue;
       }
       if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
@@ -217,6 +268,10 @@ static void *reader_main(void *arg) {
       break;
     }
   }
+  atomic_store(&t->stopping, true);
+  pthread_mutex_lock(&t->write_mu);
+  clear_pending_writes(t);
+  pthread_mutex_unlock(&t->write_mu);
   return NULL;
 }
 
@@ -234,8 +289,16 @@ bool lxl_ghostty_terminal_new(const LxlGhosttyTerminalOptions *options,
   t->cell_height_px = options->cell_height_px ? options->cell_height_px : DEFAULT_CELL_HEIGHT;
   atomic_store(&t->child_alive, true);
 
-  if (pthread_mutex_init(&t->mu, NULL) != 0 ||
-      !lxl_ghostty_event_queue_init(&t->events) ||
+  if (pthread_mutex_init(&t->mu, NULL) != 0) {
+    free(t);
+    return false;
+  }
+  if (pthread_mutex_init(&t->write_mu, NULL) != 0) {
+    pthread_mutex_destroy(&t->mu);
+    free(t);
+    return false;
+  }
+  if (!lxl_ghostty_event_queue_init(&t->events) ||
       !lxl_ghostty_osc_observer_init(&t->osc_observer, &t->events, options->osc_max_bytes) ||
       !configure_ghostty(t, options->max_scrollback)) {
     if (errbuf && errbuf_len) snprintf(errbuf, errbuf_len, "failed to initialize terminal state");
@@ -267,9 +330,11 @@ bool lxl_ghostty_terminal_new(const LxlGhosttyTerminalOptions *options,
 void lxl_ghostty_terminal_close(LxlGhosttyTerminal *t) {
   if (!t) return;
   atomic_store(&t->stopping, true);
-  if (t->pty_fd >= 0) close(t->pty_fd);
   if (atomic_load(&t->reader_started)) pthread_join(t->reader_thread, NULL);
+  if (t->pty_fd >= 0) close(t->pty_fd);
   if (atomic_load(&t->child_alive)) lxl_ghostty_pty_terminate(t->child_pid);
+
+  clear_pending_writes(t);
 
   ghostty_mouse_event_free(t->mouse_event);
   ghostty_mouse_encoder_free(t->mouse_encoder);
@@ -282,6 +347,7 @@ void lxl_ghostty_terminal_close(LxlGhosttyTerminal *t) {
   lxl_ghostty_osc_observer_deinit(&t->osc_observer);
   lxl_ghostty_event_queue_deinit(&t->events);
   pthread_mutex_destroy(&t->mu);
+  pthread_mutex_destroy(&t->write_mu);
   free(t->last_title);
   free(t->last_pwd);
   free(t);
@@ -307,20 +373,32 @@ bool lxl_ghostty_terminal_resize(LxlGhosttyTerminal *t,
 
 bool lxl_ghostty_terminal_write(LxlGhosttyTerminal *t, const char *data, size_t len) {
   if (!t || t->pty_fd < 0 || !data || len == 0) return false;
-  size_t off = 0;
-  while (off < len) {
-    ssize_t n = write(t->pty_fd, data + off, len - off);
-    if (n > 0) {
-      off += (size_t)n;
-    } else if (n < 0 && errno == EINTR) {
-      continue;
-    } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      break;
-    } else {
-      return false;
-    }
+  LxlGhosttyPendingWrite *pending = calloc(1, sizeof(*pending));
+  if (!pending) return false;
+  pending->data = malloc(len);
+  if (!pending->data) { free(pending); return false; }
+  memcpy(pending->data, data, len);
+  pending->len = len;
+  pthread_mutex_lock(&t->write_mu);
+  if (atomic_load(&t->stopping) || t->pty_fd < 0) {
+    pthread_mutex_unlock(&t->write_mu);
+    free(pending->data); free(pending);
+    return false;
   }
-  return true;
+  if (t->write_tail) t->write_tail->next = pending;
+  else t->write_head = pending;
+  t->write_tail = pending;
+  bool ok = flush_pending_writes(t);
+  pthread_mutex_unlock(&t->write_mu);
+  return ok;
+}
+
+bool lxl_ghostty_terminal_flush_writes(LxlGhosttyTerminal *t) {
+  if (!t) return false;
+  pthread_mutex_lock(&t->write_mu);
+  bool ok = t->pty_fd >= 0 && flush_pending_writes(t);
+  pthread_mutex_unlock(&t->write_mu);
+  return ok;
 }
 
 bool lxl_ghostty_terminal_paste(LxlGhosttyTerminal *t,

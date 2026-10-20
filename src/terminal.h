@@ -23,8 +23,18 @@ typedef struct {
   size_t osc_max_bytes;
 } LxlGhosttyTerminalOptions;
 
+typedef struct LxlGhosttyPendingWrite {
+  char *data;
+  size_t len;
+  size_t offset;
+  struct LxlGhosttyPendingWrite *next;
+} LxlGhosttyPendingWrite;
+
 typedef struct {
   pthread_mutex_t mu;
+  pthread_mutex_t write_mu;
+  LxlGhosttyPendingWrite *write_head;
+  LxlGhosttyPendingWrite *write_tail;
   pthread_t reader_thread;
   atomic_bool reader_started;
   atomic_bool stopping;
@@ -66,7 +76,10 @@ bool lxl_ghostty_terminal_resize(LxlGhosttyTerminal *terminal,
                                  uint16_t rows,
                                  uint32_t cell_width_px,
                                  uint32_t cell_height_px);
+/* Success accepts all bytes for ordered delivery; some may remain queued. */
 bool lxl_ghostty_terminal_write(LxlGhosttyTerminal *terminal, const char *data, size_t len);
+/* Retry queued writes without waiting; used by the PTY poller and tests. */
+bool lxl_ghostty_terminal_flush_writes(LxlGhosttyTerminal *terminal);
 bool lxl_ghostty_terminal_paste(LxlGhosttyTerminal *terminal,
                                 const char *data,
                                 size_t len,

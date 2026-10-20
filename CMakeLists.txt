@@ -65,6 +65,30 @@ if(LXL_GHOSTTY_BUILD_NATIVE)
   if(LXL_GHOSTTY_BUILD_TESTS)
     add_executable(test_dlopen tests/test_dlopen.c)
     add_test(NAME native_module_load COMMAND test_dlopen "$<TARGET_FILE:ghostty_lxl>")
+
+    add_executable(test_pty_write tests/test_pty_write.c src/terminal.c src/pty_unix.c)
+    target_include_directories(test_pty_write PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src"
+      "${GHOSTTY_SOURCE_DIR}/include"
+    )
+    target_link_libraries(test_pty_write PRIVATE lxl_ghostty_support ghostty-vt-static Threads::Threads)
+    if(UNIX AND NOT APPLE)
+      target_link_libraries(test_pty_write PRIVATE util)
+    endif()
+    add_test(NAME pty_write_backpressure COMMAND test_pty_write)
+    set_tests_properties(pty_write_backpressure PROPERTIES TIMEOUT 15)
+
+    add_executable(test_terminal_paste tests/test_terminal_paste.c src/terminal.c src/pty_unix.c)
+    target_include_directories(test_terminal_paste PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src"
+      "${GHOSTTY_SOURCE_DIR}/include"
+    )
+    target_link_libraries(test_terminal_paste PRIVATE lxl_ghostty_support ghostty-vt-static Threads::Threads)
+    if(UNIX AND NOT APPLE)
+      target_link_libraries(test_terminal_paste PRIVATE util)
+    endif()
+    add_test(NAME terminal_paste_pty_roundtrip COMMAND test_terminal_paste)
+    set_tests_properties(terminal_paste_pty_roundtrip PROPERTIES TIMEOUT 30)
   endif()
 endif()
 
